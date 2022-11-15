@@ -132,6 +132,7 @@ func doServerJob() {
 			}
 		} else if msg[0:7] == "REQUEST" {
 			// Já se foi um request, capturar o timestamp e o id da mensagem
+			clockAtReceipt := myLogicalClock
 			brk := false
 			timestampString := ""
 			idString := ""
@@ -166,7 +167,7 @@ func doServerJob() {
 			mutexLogicalClock.Unlock()
 			incrementLogicalClock()
 			// Se HELD ou WANTED e tem precedência menor, pelo menor timestamp, então enfileirar
-			if myState == "HELD" || (myState == "WANTED" && timestamp < myLogicalClock) {
+			if myState == "HELD" || (myState == "WANTED" && timestamp < clockAtReceipt) {
 				mutexQueue.Lock()
 				myQueue = append(myQueue, id)
 				mutexQueue.Unlock()
