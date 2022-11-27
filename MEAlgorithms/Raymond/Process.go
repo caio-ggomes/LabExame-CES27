@@ -16,13 +16,14 @@ var myPort string // Porta do meu servidor
 
 var myId int // Identidade deste processo
 
+var accessed bool
+
 var leftConn *net.UDPConn
 var rightConn *net.UDPConn
 var parentConn *net.UDPConn
 
 var addrMap map[int]*net.UDPAddr
-var revAddrMap map[*net.UDPAddr]int
-var connMap map[*net.UDPAddr]*net.UDPConn
+var revPortMap map[int]int
 
 var forwardRequest bool
 var holder int
@@ -55,14 +56,12 @@ func accessSharedResource() {
 	fmt.Println("Entrei na CS")
 	ServerAddr, err := net.ResolveUDPAddr("udp", "127.0.0.1"+":10001")
 	CheckError(err)
-	Conn, err := net.DialUDP("udp", nil, ServerAddr)
-	CheckError(err)
 	// Enviar mensagem com ID e TIMESTAMP, além de um texto básico
-	_, err = Conn.Write([]byte("ID: " + strconv.Itoa(myId) + "\nACESSEI A CS\n"))
+	_, err = ServerConn.WriteToUDP([]byte("ID: "+strconv.Itoa(myId)+"\nACESSEI A CS\n"), ServerAddr)
 	CheckError(err)
-	time.Sleep(time.Second * 1)
-	Conn.Close()
+	time.Sleep(time.Second * 5)
 	fmt.Println("Saí da CS")
+	accessed = false
 }
 
 func doServerJob() {
@@ -73,22 +72,16 @@ func doServerJob() {
 		n, addr, err := ServerConn.ReadFromUDP(buf)
 		CheckError(err)
 		msg := string(buf[0:n])
-		fmt.Println("Received\n"+msg+"from", addr)
-		if msg[0:7] == "REQUEST" {
-			if holder == myId {
-				holder = revAddrMap[addr]
-				go doClientJob(addrMap[holder], "TOKEN")
-			} else {
-				myQueue = append(myQueue, revAddrMap[addr])
-				if !forwardRequest {
-					forwardRequest = true
-					go doClientJob(addrMap[holder], "REQUEST")
-				}
-			}
-		} else if msg[0:5] == "TOKEN" {
+		fmt.Println("Received "+msg+" from", addr)
+		for accessed {
+			time.Sleep(500 * time.Millisecond)
+		}
+		if msg[0:5] == "TOKEN" {
+			holder = myId
 			entry := myQueue[0]
 			myQueue = myQueue[1:]
 			if entry == myId {
+				accessed = true
 				go accessSharedResource()
 				if len(myQueue) > 0 {
 					holder = myQueue[0]
@@ -99,10 +92,19 @@ func doServerJob() {
 					}
 				}
 			} else {
+				holder = entry
 				go doClientJob(addrMap[entry], "TOKEN")
 				if len(myQueue) > 0 {
 					go doClientJob(addrMap[holder], "REQUEST")
 				}
+			}
+		} else if msg[0:7] == "REQUEST" {
+			if holder == myId {
+				holder = revPortMap[addr.Port]
+				go doClientJob(addrMap[holder], "TOKEN")
+			} else {
+				myQueue = append(myQueue, revPortMap[addr.Port])
+				go doClientJob(addrMap[holder], "REQUEST")
 			}
 		}
 	}
@@ -112,14 +114,15 @@ func doServerJob() {
 func doClientJob(otherProcessAddress *net.UDPAddr, msg string) {
 	buf := make([]byte, 1024)
 	buf = []byte(msg)
-	_, err := connMap[otherProcessAddress].Write(buf)
+	_, err := ServerConn.WriteToUDP(buf, otherProcessAddress)
 	CheckError(err)
 }
 
 // Método para iniciar as conexões entre todos os processos
 func initConnections() {
 
-	//CliConn = make([]*net.UDPConn, nServers)
+	addrMap = make(map[int]*net.UDPAddr)
+	revPortMap = make(map[int]int)
 
 	ServerAddr, err := net.ResolveUDPAddr("udp", "127.0.0.1"+myPort)
 	CheckError(err)
@@ -127,38 +130,45 @@ func initConnections() {
 	CheckError(err)
 
 	for i := 0; i < 3; i++ {
-		if os.Args[2*i+3] != "NULL" {
-			id, err := strconv.Atoi(os.Args[3])
+		if os.Args[2*i+4] != "NULL" {
+			id, err := strconv.Atoi(os.Args[2*i+4])
 			CheckError(err)
-			ServerAddr, err = net.ResolveUDPAddr("udp", "127.0.0.1"+os.Args[2*i+4])
+			ServerAddr, err = net.ResolveUDPAddr("udp", "127.0.0.1"+os.Args[2*i+5])
 			CheckError(err)
 			addrMap[id] = ServerAddr
-			revAddrMap[ServerAddr] = id
-			Conn, err := net.DialUDP("udp", nil, ServerAddr)
-			CheckError(err)
-			connMap[ServerAddr] = Conn
+			revPortMap[ServerAddr.Port] = id
 		}
 	}
 }
 
-// A entrada para o coordenador será da forma ./Process {myId} {myPort} {parent_id} {parent_port} {left_id} {left_port} {right_id} {right_port}
+func idInQueue(a int, list []int) bool {
+	for _, b := range list {
+		if b == a {
+			return true
+		}
+	}
+	return false
+}
+
+// A entrada para o processo será da forma ./Process {holder} {myId} {myPort} {parent_id} {parent_port} {left_id} {left_port} {right_id} {right_port}
 func main() {
 
 	// Inicialização das variáveis
-	id, err := strconv.Atoi(os.Args[1])
+	h, err := strconv.Atoi(os.Args[1])
+	holder = h
+	id, err := strconv.Atoi(os.Args[2])
 	CheckError(err)
 	myId = id
-	myPort = os.Args[2]
-	myQueue = make([]int, 3)
+	myPort = os.Args[3]
+	myQueue = make([]int, 0)
+
+	accessed = false
 
 	// Iniciar conexões
 	initConnections()
 
 	// O fechamento de conexões ocorrerá quando a main retornar
 	defer ServerConn.Close()
-	for _, conn := range connMap {
-		defer conn.Close()
-	}
 
 	ch := make(chan string) // Canal que registra caracteres digitados
 	go readInput(ch)        // Chamar rotina que ”escuta” o teclado
@@ -175,11 +185,17 @@ func main() {
 				// Se a mensagem for "x", então pediu acesso à CS
 				if x == "x" {
 					// Pedido indevido
-					if len(myQueue) == 0 && myId != holder {
-						go doClientJob(addrMap[holder], "REQUEST")
+					for accessed {
+						time.Sleep(500 * time.Millisecond)
+					}
+					if !idInQueue(myId, myQueue) && myId != holder {
 						myQueue = append(myQueue, myId)
-					} else {
-						fmt.Println("x ignorado")
+						go doClientJob(addrMap[holder], "REQUEST")
+					} else if !idInQueue(myId, myQueue) && myId == holder {
+						myQueue = append(myQueue, myId)
+						accessed = true
+						go accessSharedResource()
+						myQueue = myQueue[1:]
 					}
 				}
 			} else {

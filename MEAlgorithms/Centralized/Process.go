@@ -20,11 +20,11 @@ var CliConn map[*net.UDPAddr]*net.UDPConn // Dicionário com conexões para os s
 var CoordAddr *net.UDPAddr                // Endereço da conexão com o coordenador
 var CoordConn *net.UDPConn                // Conexão para o servidor do coordenador
 
-var myId int          // Identidade deste processo
-var requested bool    // Requisitou token
-var coordinatorId int // Identidade do processo coordenador
-var myToken bool      // Coordenador tem ou não o token atualmente
-var myQueue []int     // Fila de processos que pediram Request ao coordenador
+var myId int               // Identidade deste processo
+var requested bool         // Requisitou token
+var coordinatorId int      // Identidade do processo coordenador
+var myToken bool           // Coordenador tem ou não o token atualmente
+var myQueue []*net.UDPAddr // Fila de endereços dos processos que pediram Request ao coordenador
 
 var mutexTokenQueue sync.Mutex // Mutex para garantir correta manipulação da variável Fila
 var mutexRequest sync.Mutex    // Mutex para garantir correta manipulação da variável request
@@ -52,18 +52,15 @@ func CheckError(err error) {
 func accessSharedResource() {
 	mutexRequest.Lock()
 	fmt.Println("Entrei na CS")
-	time.Sleep(time.Second * 1)
+	time.Sleep(time.Second * 5)
+	requested = false
 	ServerAddr, err := net.ResolveUDPAddr("udp", "127.0.0.1"+":10001")
 	CheckError(err)
-	Conn, err := net.DialUDP("udp", nil, ServerAddr)
-	CheckError(err)
 	// Enviar mensagem com ID e TIMESTAMP, além de um texto básico
-	_, err = Conn.Write([]byte("ID: " + strconv.Itoa(myId) + "\nACESSEI A CS\n"))
+	_, err = ServerConn.WriteToUDP([]byte("ID: "+strconv.Itoa(myId)+"\nACESSEI A CS\n"), ServerAddr)
 	CheckError(err)
-	Conn.Close()
 	fmt.Println("Saí da CS")
 	go doClientJob(CoordAddr, "RELEASE TOKEN")
-	requested = false
 	mutexRequest.Unlock()
 }
 
@@ -77,14 +74,14 @@ func doServerJob() {
 			n, addr, err := ServerConn.ReadFromUDP(buf)
 			CheckError(err)
 			msg := string(buf[0:n])
-			fmt.Println("Received\n"+msg+"from", addr)
+			fmt.Println("Received "+msg+" from ", addr)
 			if msg[0:13] == "REQUEST TOKEN" {
 				mutexTokenQueue.Lock()
 				if myToken {
 					myToken = false
-					go doClientJob(addr, msg)
+					go doClientJob(addr, "GRANT TOKEN")
 				} else {
-					myQueue = append(myQueue, revCliAddr[addr])
+					myQueue = append(myQueue, addr)
 				}
 				mutexTokenQueue.Unlock()
 			} else if msg[0:13] == "RELEASE TOKEN" {
@@ -92,7 +89,7 @@ func doServerJob() {
 				if len(myQueue) > 0 {
 					mutexTokenQueue.Lock()
 					myToken = false
-					go doClientJob(CliAddr[myQueue[0]], "GRANT TOKEN")
+					go doClientJob(myQueue[0], "GRANT TOKEN")
 					myQueue = myQueue[1:]
 					mutexTokenQueue.Unlock()
 				}
@@ -103,7 +100,7 @@ func doServerJob() {
 			n, addr, err := ServerConn.ReadFromUDP(buf)
 			CheckError(err)
 			msg := string(buf[0:n])
-			fmt.Println("Received\n"+msg+"from", addr)
+			fmt.Println("Received "+msg+" from ", addr)
 			if msg[0:11] == "GRANT TOKEN" {
 				go accessSharedResource()
 			}
@@ -115,12 +112,16 @@ func doServerJob() {
 func doClientJob(otherProcessAddress *net.UDPAddr, msg string) {
 	buf := make([]byte, 1024)
 	buf = []byte(msg)
-	_, err := CliConn[otherProcessAddress].Write(buf)
+	_, err := ServerConn.WriteToUDP(buf, otherProcessAddress)
 	CheckError(err)
 }
 
 // Método para iniciar as conexões entre todos os processos
 func initConnections() {
+
+	CliAddr = make(map[int]*net.UDPAddr)
+	revCliAddr = make(map[*net.UDPAddr]int)
+	CliConn = make(map[*net.UDPAddr]*net.UDPConn)
 
 	nServers = (len(os.Args) - 4) / 2
 	/*Esse -4 tira o nome (no caso ./Process), o 'c' ou 'p', o Id deste processo, e a porta
@@ -133,31 +134,21 @@ func initConnections() {
 	ServerConn, err = net.ListenUDP("udp", ServerAddr)
 	CheckError(err)
 
-	if myId == coordinatorId {
-		/*Conexões com os servidores de cada processo. Colocar tais conexões no vetor CliConn.*/
-		for process := 0; process < nServers; process++ {
-			ServerAddr, err := net.ResolveUDPAddr("udp", "127.0.0.1"+os.Args[2*process+5])
-			CheckError(err)
-			id, err := strconv.Atoi(os.Args[2*process+4])
-			CheckError(err)
-			CliAddr[id] = ServerAddr
-			revCliAddr[ServerAddr] = id
-			Conn, err := net.DialUDP("udp", nil, ServerAddr)
-			CheckError(err)
-			CliConn[ServerAddr] = Conn
-		}
-	} else {
-		coordinatorPort := os.Args[6]
+	if myId != coordinatorId {
+		coordinatorPort := os.Args[5]
 		ServerAddr, err := net.ResolveUDPAddr("udp", "127.0.0.1"+coordinatorPort)
 		CoordAddr = ServerAddr
 		CheckError(err)
 		Conn, err := net.DialUDP("udp", nil, CoordAddr)
 		CheckError(err)
 		CoordConn = Conn
+		CliAddr[coordinatorId] = CoordAddr
+		revCliAddr[CoordAddr] = coordinatorId
+		CliConn[CoordAddr] = CoordConn
 	}
 }
 
-// A entrada para o coordenador será da forma ./Process c {myId} {myPort} {Process_1_id} {Process_1_port} ... {Process_n_id} {Process_n_port}
+// A entrada para o coordenador será da forma ./Process c {myId} {myPort}
 // Já para o processo, a entrada será ./Process p {myId} {myPort} {Coordinator_id} {Coordinator_port}
 func main() {
 
@@ -166,10 +157,11 @@ func main() {
 	CheckError(err)
 	myId = id
 	myPort = os.Args[3]
-	myQueue = make([]int, 0)
+	myQueue = make([]*net.UDPAddr, 0)
 
 	if os.Args[1] == "c" {
 		coordinatorId = myId
+		myToken = true
 	} else {
 		id, err := strconv.Atoi(os.Args[4])
 		CheckError(err)
@@ -203,9 +195,7 @@ func main() {
 						if requested {
 							fmt.Println("x ignorado")
 						} else {
-							mutexRequest.Lock()
 							requested = true
-							mutexRequest.Unlock()
 							go doClientJob(CoordAddr, "REQUEST TOKEN")
 						}
 					}
@@ -218,6 +208,11 @@ func main() {
 				time.Sleep(time.Millisecond * 400)
 			}
 
+			// Espera um pouco
+			time.Sleep(time.Millisecond * 400)
+		}
+	} else {
+		for {
 			// Espera um pouco
 			time.Sleep(time.Millisecond * 400)
 		}

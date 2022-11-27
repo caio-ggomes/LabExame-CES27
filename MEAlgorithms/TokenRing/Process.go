@@ -19,6 +19,7 @@ var nextConn *net.UDPConn
 
 var myId int       // Identidade deste processo
 var requested bool // Requisitou token
+var hasToken bool
 
 var mutexRequest sync.Mutex // Mutex para garantir correta manipulação da variável request
 
@@ -44,20 +45,14 @@ func CheckError(err error) {
 // Rotina para acessar o recurso compartilhado
 func accessSharedResource() {
 	fmt.Println("Entrei na CS")
-	time.Sleep(time.Second * 1)
+	time.Sleep(time.Second * 5)
 	ServerAddr, err := net.ResolveUDPAddr("udp", "127.0.0.1"+":10001")
 	CheckError(err)
-	Conn, err := net.DialUDP("udp", nil, ServerAddr)
-	CheckError(err)
 	// Enviar mensagem com ID e TIMESTAMP, além de um texto básico
-	_, err = Conn.Write([]byte("ID: " + strconv.Itoa(myId) + "\nACESSEI A CS\n"))
+	_, err = ServerConn.WriteToUDP([]byte("ID: "+strconv.Itoa(myId)+"\nACESSEI A CS\n"), ServerAddr)
 	CheckError(err)
-	mutexRequest.Lock()
-	requested = false
-	mutexRequest.Unlock()
-	Conn.Close()
 	fmt.Println("Saí da CS")
-	go doClientJob(nextConn, "TOKEN")
+	requested = false
 }
 
 func doServerJob() {
@@ -68,20 +63,33 @@ func doServerJob() {
 		n, addr, err := ServerConn.ReadFromUDP(buf)
 		CheckError(err)
 		msg := string(buf[0:n])
-		fmt.Println("Received\n"+msg+"from", addr)
+		fmt.Println("Received "+msg+" from ", addr)
 		if msg[0:5] == "TOKEN" {
 			if requested {
+				hasToken = true
 				go accessSharedResource()
+			} else {
+				go doClientJob(nextAddr, "TOKEN")
+			}
+		} else if msg[0:7] == "REQUEST" {
+			if hasToken {
+				hasToken = false
+				for requested {
+					time.Sleep(time.Millisecond * 500)
+				}
+				go doClientJob(nextAddr, "TOKEN")
+			} else {
+				go doClientJob(nextAddr, "REQUEST")
 			}
 		}
 	}
 }
 
 // Rotina para enviar mensagens para outros processos
-func doClientJob(nextProcessConn *net.UDPConn, msg string) {
+func doClientJob(nextProcessAddr *net.UDPAddr, msg string) {
 	buf := make([]byte, 1024)
 	buf = []byte(msg)
-	_, err := nextProcessConn.Write(buf)
+	_, err := ServerConn.WriteToUDP(buf, nextProcessAddr)
 	CheckError(err)
 }
 
@@ -99,10 +107,13 @@ func initConnections() {
 	CheckError(err)
 }
 
-// A entrada para o coordenador será da forma ./Process {has_token} {myId} {myPort} {nextId} {nextPort}
+// A entrada será da forma ./Process {has_token} {myId} {myPort} {nextId} {nextPort}
 func main() {
 
 	// Inicialização das variáveis
+	t, err := strconv.ParseBool(os.Args[1])
+	CheckError(err)
+	hasToken = t
 	id, err := strconv.Atoi(os.Args[2])
 	CheckError(err)
 	myId = id
@@ -136,9 +147,12 @@ func main() {
 					if requested {
 						fmt.Println("x ignorado")
 					} else {
-						mutexRequest.Lock()
 						requested = true
-						mutexRequest.Unlock()
+						if hasToken {
+							go accessSharedResource()
+						} else {
+							go doClientJob(nextAddr, "REQUEST")
+						}
 					}
 				}
 			} else {
