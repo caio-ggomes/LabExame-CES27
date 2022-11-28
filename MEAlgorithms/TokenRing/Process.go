@@ -54,7 +54,6 @@ func accessSharedResource() {
 	_, err = ServerConn.WriteToUDP([]byte("ID: "+strconv.Itoa(myId)+"\nACESSEI A CS\n"), ServerAddr)
 	CheckError(err)
 	fmt.Println("Saí da CS")
-	requested = false
 }
 
 func doServerJob() {
@@ -68,21 +67,10 @@ func doServerJob() {
 		fmt.Println("Received "+msg+" from ", addr)
 		if msg[0:5] == "TOKEN" {
 			if requested {
-				hasToken = true
-				go accessSharedResource()
-			} else {
-				go doClientJob(nextAddr, "TOKEN")
+				requested = false
+				accessSharedResource()
 			}
-		} else if msg[0:7] == "REQUEST" {
-			if hasToken {
-				hasToken = false
-				for requested {
-					time.Sleep(time.Millisecond * 500)
-				}
-				go doClientJob(nextAddr, "TOKEN")
-			} else {
-				go doClientJob(nextAddr, "REQUEST")
-			}
+			go doClientJob(nextAddr, "TOKEN")
 		}
 	}
 }
@@ -153,6 +141,7 @@ func main() {
 					} else {
 						requested = true
 						if hasToken {
+							hasToken = false
 							go accessSharedResource()
 						} else {
 							go doClientJob(nextAddr, "REQUEST")
