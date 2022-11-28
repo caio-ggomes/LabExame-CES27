@@ -10,6 +10,8 @@ import (
 	"time"
 )
 
+var msgCounter int
+
 // Variáveis globais interessantes para o processo
 var err string
 var myPort string                         // Porta do meu servidor
@@ -110,6 +112,7 @@ func doServerJob() {
 
 // Rotina para enviar mensagens para outros processos
 func doClientJob(otherProcessAddress *net.UDPAddr, msg string) {
+	msgCounter++
 	buf := make([]byte, 1024)
 	buf = []byte(msg)
 	_, err := ServerConn.WriteToUDP(buf, otherProcessAddress)
@@ -152,6 +155,7 @@ func initConnections() {
 // Já para o processo, a entrada será ./Process p {myId} {myPort} {Coordinator_id} {Coordinator_port}
 func main() {
 
+	msgCounter = 0
 	// Inicialização das variáveis
 	id, err := strconv.Atoi(os.Args[2])
 	CheckError(err)
@@ -199,6 +203,9 @@ func main() {
 							go doClientJob(CoordAddr, "REQUEST TOKEN")
 						}
 					}
+					if x == "y" {
+						fmt.Println(msgCounter)
+					}
 				} else {
 					fmt.Println("Canal fechado!")
 				}
@@ -213,6 +220,22 @@ func main() {
 		}
 	} else {
 		for {
+			select {
+			case x, valid := <-ch:
+				if valid {
+					fmt.Printf("Recebi do teclado: %s \n", x)
+
+					if x == "y" {
+						fmt.Println(msgCounter)
+					}
+				} else {
+					fmt.Println("Canal fechado!")
+				}
+			default:
+				// Fazer nada!
+				// Mas não fica bloqueado esperando o teclado
+				time.Sleep(time.Millisecond * 400)
+			}
 			// Espera um pouco
 			time.Sleep(time.Millisecond * 400)
 		}

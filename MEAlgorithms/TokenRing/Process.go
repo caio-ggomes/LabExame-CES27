@@ -10,6 +10,8 @@ import (
 	"time"
 )
 
+var msgCounter int
+
 // Variáveis globais interessantes para o processo
 var err string
 var myPort string // Porta do meu servidor
@@ -87,6 +89,7 @@ func doServerJob() {
 
 // Rotina para enviar mensagens para outros processos
 func doClientJob(nextProcessAddr *net.UDPAddr, msg string) {
+	msgCounter++
 	buf := make([]byte, 1024)
 	buf = []byte(msg)
 	_, err := ServerConn.WriteToUDP(buf, nextProcessAddr)
@@ -110,6 +113,7 @@ func initConnections() {
 // A entrada será da forma ./Process {has_token} {myId} {myPort} {nextId} {nextPort}
 func main() {
 
+	msgCounter = 0
 	// Inicialização das variáveis
 	t, err := strconv.ParseBool(os.Args[1])
 	CheckError(err)
@@ -154,6 +158,9 @@ func main() {
 							go doClientJob(nextAddr, "REQUEST")
 						}
 					}
+				}
+				if x == "y" {
+					fmt.Println(msgCounter)
 				}
 			} else {
 				fmt.Println("Canal fechado!")

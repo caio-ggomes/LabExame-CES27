@@ -10,6 +10,8 @@ import (
 	"time"
 )
 
+var msgCounter int
+
 // Variáveis globais interessantes para o processo
 var err string
 var myPort string // Porta do meu servidor
@@ -30,7 +32,6 @@ var holder int
 var myQueue []int // Fila de processos que pediram Request ao coordenador
 
 var mutexTokenQueue sync.Mutex // Mutex para garantir correta manipulação da variável Fila
-var mutexRequest sync.Mutex    // Mutex para garantir correta manipulação da variável request
 
 var ServerConn *net.UDPConn // Conexão do servidor deste processo(onde são recebidas mensagens dos outros processos)
 
@@ -54,14 +55,40 @@ func CheckError(err error) {
 // Rotina para acessar o recurso compartilhado
 func accessSharedResource() {
 	fmt.Println("Entrei na CS")
+	accessed = true
 	ServerAddr, err := net.ResolveUDPAddr("udp", "127.0.0.1"+":10001")
 	CheckError(err)
 	// Enviar mensagem com ID e TIMESTAMP, além de um texto básico
 	_, err = ServerConn.WriteToUDP([]byte("ID: "+strconv.Itoa(myId)+"\nACESSEI A CS\n"), ServerAddr)
 	CheckError(err)
-	time.Sleep(time.Second * 5)
+	time.Sleep(time.Second * 10)
 	fmt.Println("Saí da CS")
 	accessed = false
+}
+
+func dequeue() {
+	for {
+		if len(myQueue) > 0 {
+			if myId == holder {
+				entry := myQueue[0]
+				if entry == myId {
+					myQueue = myQueue[1:]
+					accessSharedResource()
+				} else {
+					holder = entry
+					myQueue = myQueue[1:]
+					go doClientJob(addrMap[holder], "TOKEN")
+					if len(myQueue) > 0 {
+						forwardRequest = true
+						go doClientJob(addrMap[holder], "REQUEST")
+					}
+				}
+			} else if !forwardRequest {
+				forwardRequest = true
+				go doClientJob(addrMap[holder], "REQUEST")
+			}
+		}
+	}
 }
 
 func doServerJob() {
@@ -73,38 +100,12 @@ func doServerJob() {
 		CheckError(err)
 		msg := string(buf[0:n])
 		fmt.Println("Received "+msg+" from", addr)
-		for accessed {
-			time.Sleep(500 * time.Millisecond)
-		}
 		if msg[0:5] == "TOKEN" {
 			holder = myId
-			entry := myQueue[0]
-			myQueue = myQueue[1:]
-			if entry == myId {
-				accessed = true
-				go accessSharedResource()
-				if len(myQueue) > 0 {
-					holder = myQueue[0]
-					myQueue = myQueue[1:]
-					go doClientJob(addrMap[holder], "TOKEN")
-					if len(myQueue) > 0 {
-						go doClientJob(addrMap[holder], "REQUEST")
-					}
-				}
-			} else {
-				holder = entry
-				go doClientJob(addrMap[entry], "TOKEN")
-				if len(myQueue) > 0 {
-					go doClientJob(addrMap[holder], "REQUEST")
-				}
-			}
+			forwardRequest = false
 		} else if msg[0:7] == "REQUEST" {
-			if holder == myId {
-				holder = revPortMap[addr.Port]
-				go doClientJob(addrMap[holder], "TOKEN")
-			} else {
+			if !idInQueue(revPortMap[addr.Port], myQueue) {
 				myQueue = append(myQueue, revPortMap[addr.Port])
-				go doClientJob(addrMap[holder], "REQUEST")
 			}
 		}
 	}
@@ -112,6 +113,8 @@ func doServerJob() {
 
 // Rotina para enviar mensagens para outros processos
 func doClientJob(otherProcessAddress *net.UDPAddr, msg string) {
+	fmt.Println("Sent "+msg+" to ", otherProcessAddress)
+	msgCounter++
 	buf := make([]byte, 1024)
 	buf = []byte(msg)
 	_, err := ServerConn.WriteToUDP(buf, otherProcessAddress)
@@ -153,6 +156,7 @@ func idInQueue(a int, list []int) bool {
 // A entrada para o processo será da forma ./Process {holder} {myId} {myPort} {parent_id} {parent_port} {left_id} {left_port} {right_id} {right_port}
 func main() {
 
+	msgCounter = 0
 	// Inicialização das variáveis
 	h, err := strconv.Atoi(os.Args[1])
 	holder = h
@@ -175,6 +179,7 @@ func main() {
 
 	// Escutar outros processos
 	go doServerJob()
+	go dequeue()
 
 	for {
 		// Verificar (de forma não bloqueante) se tem algo no stdin (input do terminal)
@@ -185,18 +190,17 @@ func main() {
 				// Se a mensagem for "x", então pediu acesso à CS
 				if x == "x" {
 					// Pedido indevido
-					for accessed {
-						time.Sleep(500 * time.Millisecond)
-					}
-					if !idInQueue(myId, myQueue) && myId != holder {
+					// for accessed {
+					// 	time.Sleep(500 * time.Millisecond)
+					// }
+					if !idInQueue(myId, myQueue) {
 						myQueue = append(myQueue, myId)
-						go doClientJob(addrMap[holder], "REQUEST")
-					} else if !idInQueue(myId, myQueue) && myId == holder {
-						myQueue = append(myQueue, myId)
-						accessed = true
-						go accessSharedResource()
-						myQueue = myQueue[1:]
 					}
+
+				} else if x == "y" {
+					fmt.Println(msgCounter)
+				} else if x == "z" {
+					msgCounter = 0
 				}
 			} else {
 				fmt.Println("Canal fechado!")
