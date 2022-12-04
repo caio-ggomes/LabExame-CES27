@@ -1,0 +1,7 @@
+./Process c 0 :10000
+./Process p 1 :10002 0 :10000
+./Process p 2 :10003 0 :10000
+./Process p 3 :10004 0 :10000
+./Process p 4 :10005 0 :10000
+./Process p 5 :10006 0 :10000
+./Process p 6 :10007 0 :10000

@@ -13,15 +13,15 @@ import (
 var msgCounter int
 
 // Variáveis globais interessantes para o processo
-var err string
-var myPort string // Porta do meu servidor
-var nextAddr *net.UDPAddr
-var nextId int
-var nextConn *net.UDPConn
+var err string            // String de erro no caso de falha em algum procedimento
+var myPort string         // Porta do meu servidor
+var nextAddr *net.UDPAddr // Endereço do próximo na topologia anel
+var nextId int            // Id do próximo
+var nextConn *net.UDPConn // Conexão com o próximo
 
 var myId int       // Identidade deste processo
 var requested bool // Requisitou token
-var hasToken bool
+var hasToken bool  // Possui o token atualmente
 
 var mutexRequest sync.Mutex // Mutex para garantir correta manipulação da variável request
 
@@ -44,16 +44,25 @@ func CheckError(err error) {
 	}
 }
 
-// Rotina para acessar o recurso compartilhado
-func accessSharedResource() {
-	fmt.Println("Entrei na CS")
-	time.Sleep(time.Second * 5)
-	ServerAddr, err := net.ResolveUDPAddr("udp", "127.0.0.1"+":10001")
-	CheckError(err)
-	// Enviar mensagem com ID e TIMESTAMP, além de um texto básico
-	_, err = ServerConn.WriteToUDP([]byte("ID: "+strconv.Itoa(myId)+"\nACESSEI A CS\n"), ServerAddr)
-	CheckError(err)
-	fmt.Println("Saí da CS")
+// Rotina para tentar acessar o recurso compartilhado
+func tryAccessSharedResource() {
+	for {
+		// Acessar a CS apenas quando tiver requisitado e tiver o token
+		for !(requested && hasToken) {
+
+		}
+		fmt.Println("Entrei na CS")
+		// Tempo artificial de acesso à CS
+		time.Sleep(time.Second * 5)
+		ServerAddr, err := net.ResolveUDPAddr("udp", "127.0.0.1"+":10001")
+		CheckError(err)
+		// Enviar mensagem com ID e um texto básico
+		_, err = ServerConn.WriteToUDP([]byte("ID: "+strconv.Itoa(myId)+"\nACESSEI A CS\n"), ServerAddr)
+		CheckError(err)
+		fmt.Println("Saí da CS")
+		// Acessou CS, não está mais requisitando
+		requested = false
+	}
 }
 
 func doServerJob() {
@@ -66,17 +75,25 @@ func doServerJob() {
 		msg := string(buf[0:n])
 		fmt.Println("Received "+msg+" from ", addr)
 		if msg[0:5] == "TOKEN" {
-			if requested {
-				requested = false
-				accessSharedResource()
+			hasToken = true
+			fwd_msg := msg[0:6]
+			msgCounter, err = strconv.Atoi(msg[6:])
+			CheckError(err)
+			msgCounter++
+			fwd_msg += strconv.Itoa(msgCounter)
+			// Se recebeu token, enquanto está requisitado o token neste processo, esperar o término do acesso à CS
+			for requested {
+
 			}
-			go doClientJob(nextAddr, "TOKEN")
+			hasToken = false
+			doClientJob(nextAddr, fwd_msg)
 		}
 	}
 }
 
 // Rotina para enviar mensagens para outros processos
 func doClientJob(nextProcessAddr *net.UDPAddr, msg string) {
+	time.Sleep(2 * time.Second)
 	msgCounter++
 	buf := make([]byte, 1024)
 	buf = []byte(msg)
@@ -126,6 +143,12 @@ func main() {
 
 	// Escutar outros processos
 	go doServerJob()
+	go tryAccessSharedResource()
+
+	if hasToken {
+		hasToken = false
+		doClientJob(nextAddr, "TOKEN 1")
+	}
 
 	for {
 		// Verificar (de forma não bloqueante) se tem algo no stdin (input do terminal)
@@ -140,12 +163,6 @@ func main() {
 						fmt.Println("x ignorado")
 					} else {
 						requested = true
-						if hasToken {
-							hasToken = false
-							go accessSharedResource()
-						} else {
-							go doClientJob(nextAddr, "REQUEST")
-						}
 					}
 				}
 				if x == "y" {

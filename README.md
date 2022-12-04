@@ -18,5 +18,24 @@ $ go build SharedResource.go
 Nos demais diretórios dentro de MEAlgorithms
 ```{c}
 $ go build Process.go
-./Process
 ```
+
+Execução do Algoritmo de Token Ring:
+```{c}
+./Process {has_token} {myId} {myPort} {nextId} {nextPort}
+```
+
+Execução do Algoritmo Centralizado (se for processo):
+```{c}
+./Process p {myId} {myPort} {Coordinator_id} {Coordinator_port}
+```
+ou (se for coordenador)
+```{c}
+./Process c {myId} {myPort}
+```
+
+Execução do Algoritmo de Raymond:
+```{c}
+./Process {holder} {myId} {myPort} {parent_id} {parent_port} {left_id} {left_port} {right_id} {right_port}
+```
+Caso não tenha filho ou pai colocar "NULL" em id e porta correspondente. {holder} diz respeito a qual vizinho está no caminho de quem é o detentor do token

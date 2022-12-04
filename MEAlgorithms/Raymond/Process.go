@@ -10,26 +10,24 @@ import (
 	"time"
 )
 
-var msgCounter int
-
 // Variáveis globais interessantes para o processo
-var err string
-var myPort string // Porta do meu servidor
+
+var msgCounter int // Contador de mensagens enviadas
+var err string     // String de erro em caso de falha em algum procedimento
+var myPort string  // Porta do meu servidor
 
 var myId int // Identidade deste processo
 
-var accessed bool
+var leftConn *net.UDPConn   // Conexão com filho esquerdo
+var rightConn *net.UDPConn  // Conexão com filho direito
+var parentConn *net.UDPConn // Conexão com pai
 
-var leftConn *net.UDPConn
-var rightConn *net.UDPConn
-var parentConn *net.UDPConn
+var addrMap map[int]*net.UDPAddr // Dicionário com endereço dos vizinhos baseado no ID
+var revPortMap map[int]int       // Dicionário com ID dos vizinhos baseado no endereço
 
-var addrMap map[int]*net.UDPAddr
-var revPortMap map[int]int
-
-var forwardRequest bool
-var holder int
-var myQueue []int // Fila de processos que pediram Request ao coordenador
+var forwardRequest bool // Encaminhou request para alguém desde a última vez que recebeu token
+var holder int          // Vizinho que está no caminho para o detentor do token, ou o próprio processo, em caso de possuir o token
+var myQueue []int       // Fila de processos que pediram Request
 
 var mutexTokenQueue sync.Mutex // Mutex para garantir correta manipulação da variável Fila
 
@@ -55,38 +53,45 @@ func CheckError(err error) {
 // Rotina para acessar o recurso compartilhado
 func accessSharedResource() {
 	fmt.Println("Entrei na CS")
-	accessed = true
 	ServerAddr, err := net.ResolveUDPAddr("udp", "127.0.0.1"+":10001")
 	CheckError(err)
 	// Enviar mensagem com ID e TIMESTAMP, além de um texto básico
 	_, err = ServerConn.WriteToUDP([]byte("ID: "+strconv.Itoa(myId)+"\nACESSEI A CS\n"), ServerAddr)
 	CheckError(err)
+	// Tempo artificial de acesso à CS
 	time.Sleep(time.Second * 10)
 	fmt.Println("Saí da CS")
-	accessed = false
 }
 
+// Rotina para desenfileirar processos
 func dequeue() {
 	for {
 		if len(myQueue) > 0 {
+			mutexTokenQueue.Lock()
 			if myId == holder {
+				// Se tem alguém na fila e possuo token
 				entry := myQueue[0]
 				if entry == myId {
+					// Se for o próprio processo na fila, acessar a CS
 					myQueue = myQueue[1:]
 					accessSharedResource()
 				} else {
+					// Caso contrário, enviar o token
 					holder = entry
 					myQueue = myQueue[1:]
 					go doClientJob(addrMap[holder], "TOKEN")
 					if len(myQueue) > 0 {
+						// Se ainda há processos na fila, pedir de volta o token
 						forwardRequest = true
 						go doClientJob(addrMap[holder], "REQUEST")
 					}
 				}
 			} else if !forwardRequest {
+				// Se ainda não tiver encaminhado requisição, encaminhar
 				forwardRequest = true
 				go doClientJob(addrMap[holder], "REQUEST")
 			}
+			mutexTokenQueue.Unlock()
 		}
 	}
 }
@@ -101,12 +106,16 @@ func doServerJob() {
 		msg := string(buf[0:n])
 		fmt.Println("Received "+msg+" from", addr)
 		if msg[0:5] == "TOKEN" {
+			// Se recebeu token, guardar esta informação
 			holder = myId
 			forwardRequest = false
 		} else if msg[0:7] == "REQUEST" {
+			// Se recebeu request, enfileirar se ainda não tiver recebido request desse ID
+			mutexTokenQueue.Lock()
 			if !idInQueue(revPortMap[addr.Port], myQueue) {
 				myQueue = append(myQueue, revPortMap[addr.Port])
 			}
+			mutexTokenQueue.Unlock()
 		}
 	}
 }
@@ -132,6 +141,7 @@ func initConnections() {
 	ServerConn, err = net.ListenUDP("udp", ServerAddr)
 	CheckError(err)
 
+	// Estabelecer conexões com vizinhos
 	for i := 0; i < 3; i++ {
 		if os.Args[2*i+4] != "NULL" {
 			id, err := strconv.Atoi(os.Args[2*i+4])
@@ -144,6 +154,7 @@ func initConnections() {
 	}
 }
 
+// Verificação se certo ID está na fila
 func idInQueue(a int, list []int) bool {
 	for _, b := range list {
 		if b == a {
@@ -166,8 +177,6 @@ func main() {
 	myPort = os.Args[3]
 	myQueue = make([]int, 0)
 
-	accessed = false
-
 	// Iniciar conexões
 	initConnections()
 
@@ -179,6 +188,7 @@ func main() {
 
 	// Escutar outros processos
 	go doServerJob()
+	// Tentar desenfileirar
 	go dequeue()
 
 	for {
@@ -189,13 +199,12 @@ func main() {
 				fmt.Printf("Recebi do teclado: %s \n", x)
 				// Se a mensagem for "x", então pediu acesso à CS
 				if x == "x" {
-					// Pedido indevido
-					// for accessed {
-					// 	time.Sleep(500 * time.Millisecond)
-					// }
+					// Se recebeu x e não está na fila, enfileirar
+					mutexTokenQueue.Lock()
 					if !idInQueue(myId, myQueue) {
 						myQueue = append(myQueue, myId)
 					}
+					mutexTokenQueue.Unlock()
 
 				} else if x == "y" {
 					fmt.Println(msgCounter)

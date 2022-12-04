@@ -10,14 +10,11 @@ import (
 	"time"
 )
 
-var msgCounter int
-
 // Variáveis globais interessantes para o processo
-var err string
+
+var msgCounter int                        // Contador de mensagens enviadas
+var err string                            // String de erro em algum procedimento
 var myPort string                         // Porta do meu servidor
-var nServers int                          // Quantidade de outros processos
-var CliAddr map[int]*net.UDPAddr          // Dicionário com endereços das conexões para os servidores dos outros processos
-var revCliAddr map[*net.UDPAddr]int       // Dicionário com endereços das conexões para os servidores dos outros processos
 var CliConn map[*net.UDPAddr]*net.UDPConn // Dicionário com conexões para os servidores dos outros processos
 var CoordAddr *net.UDPAddr                // Endereço da conexão com o coordenador
 var CoordConn *net.UDPConn                // Conexão para o servidor do coordenador
@@ -54,6 +51,7 @@ func CheckError(err error) {
 func accessSharedResource() {
 	mutexRequest.Lock()
 	fmt.Println("Entrei na CS")
+	// Tempo artificial de acesso do recurso compartilhado
 	time.Sleep(time.Second * 5)
 	requested = false
 	ServerAddr, err := net.ResolveUDPAddr("udp", "127.0.0.1"+":10001")
@@ -71,6 +69,7 @@ func doServerJob() {
 	buf := make([]byte, 1024)
 	// Ler da conexão UDP a mensagem no buffer e tomar as devidas medidas em caso de receber REQUEST ou RELEASE
 
+	// Server job do coordenador
 	if myId == coordinatorId {
 		for {
 			n, addr, err := ServerConn.ReadFromUDP(buf)
@@ -79,14 +78,17 @@ func doServerJob() {
 			fmt.Println("Received "+msg+" from ", addr)
 			if msg[0:13] == "REQUEST TOKEN" {
 				mutexTokenQueue.Lock()
+				// Se receber request e tiver o token, garantir ele para o requisitante
 				if myToken {
 					myToken = false
 					go doClientJob(addr, "GRANT TOKEN")
 				} else {
+					// Caso nao possua o token atualmente, enfileirar
 					myQueue = append(myQueue, addr)
 				}
 				mutexTokenQueue.Unlock()
 			} else if msg[0:13] == "RELEASE TOKEN" {
+				// Caso receba release, fica detentor do token e, se tiver processos na fila, garantir o token ao primeiro elemento desta
 				myToken = true
 				if len(myQueue) > 0 {
 					mutexTokenQueue.Lock()
@@ -98,11 +100,13 @@ func doServerJob() {
 			}
 		}
 	} else {
+		// Server job do processo
 		for {
 			n, addr, err := ServerConn.ReadFromUDP(buf)
 			CheckError(err)
 			msg := string(buf[0:n])
 			fmt.Println("Received "+msg+" from ", addr)
+			// Se recebeu grant, acessar o recurso compartilhado
 			if msg[0:11] == "GRANT TOKEN" {
 				go accessSharedResource()
 			}
@@ -122,21 +126,16 @@ func doClientJob(otherProcessAddress *net.UDPAddr, msg string) {
 // Método para iniciar as conexões entre todos os processos
 func initConnections() {
 
-	CliAddr = make(map[int]*net.UDPAddr)
-	revCliAddr = make(map[*net.UDPAddr]int)
 	CliConn = make(map[*net.UDPAddr]*net.UDPConn)
 
-	nServers = (len(os.Args) - 4) / 2
-	/*Esse -4 tira o nome (no caso ./Process), o 'c' ou 'p', o Id deste processo, e a porta
-	deste processo. As demais portas são dos outros processos*/
-
-	//CliConn = make([]*net.UDPConn, nServers)
+	// Conexão para escutar
 
 	ServerAddr, err := net.ResolveUDPAddr("udp", "127.0.0.1"+myPort)
 	CheckError(err)
 	ServerConn, err = net.ListenUDP("udp", ServerAddr)
 	CheckError(err)
 
+	// Se não for coordenador, estabelecer uma conexão com este para escrever
 	if myId != coordinatorId {
 		coordinatorPort := os.Args[5]
 		ServerAddr, err := net.ResolveUDPAddr("udp", "127.0.0.1"+coordinatorPort)
@@ -145,8 +144,6 @@ func initConnections() {
 		Conn, err := net.DialUDP("udp", nil, CoordAddr)
 		CheckError(err)
 		CoordConn = Conn
-		CliAddr[coordinatorId] = CoordAddr
-		revCliAddr[CoordAddr] = coordinatorId
 		CliConn[CoordAddr] = CoordConn
 	}
 }
@@ -155,8 +152,8 @@ func initConnections() {
 // Já para o processo, a entrada será ./Process p {myId} {myPort} {Coordinator_id} {Coordinator_port}
 func main() {
 
-	msgCounter = 0
 	// Inicialização das variáveis
+	msgCounter = 0
 	id, err := strconv.Atoi(os.Args[2])
 	CheckError(err)
 	myId = id
